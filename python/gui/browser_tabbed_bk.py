@@ -1,10 +1,16 @@
 from __future__ import unicode_literals
-import sys
+import json
 import os
 import random
+import re
+import sys
+import time
+
+# PyQt
 from PyQt5.QtCore import *
 from PyQt5.QtWidgets import *
 from PyQt5.QtGui import *
+from PyQt5.QtWebEngine import *
 from PyQt5.QtWebEngineWidgets import *
 from PyQt5.QtPrintSupport import *
 from matplotlib.backends import qt_compat
@@ -14,14 +20,26 @@ if use_pyside:
 else:
     from PyQt5 import QtGui, QtCore
 
-from numpy import arange, sin, pi
+# Additional imports
+from numpy import arange, sin, pi, ndarray, asarray
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
+from matplotlib.figure import Figure, Axes
+from matplotlib.dates import epoch2num
+from urllib.parse import urlencode
 
+# Project imports
+from python.tdameritrade import TDClient
+import python.tdameritrade.auth as tdauth
 
-class AboutDialog(QDialog):
+#Converters for datetime converter
+import datetime
+from pandas.plotting import register_matplotlib_converters
+register_matplotlib_converters()
+
+import pdb
+class BasicDialog(QDialog):
     def __init__(self, *args, **kwargs):
-        super(AboutDialog, self).__init__(*args, **kwargs)
+        super(BasicDialog, self).__init__(*args, **kwargs)
 
         QBtn = QDialogButtonBox.Ok  # No cancel
         self.buttonBox = QDialogButtonBox(QBtn)
@@ -32,7 +50,7 @@ class AboutDialog(QDialog):
 
         title = QLabel("Value Investing Calculator")
         font = title.font()
-        font.setPointSize(20)
+        font.setPointSize(14)
         title.setFont(font)
 
         layout.addWidget(title)
@@ -40,121 +58,63 @@ class AboutDialog(QDialog):
         logo = QLabel()
         logo.setPixmap(QPixmap(os.path.join('images', 'ma-icon-128.png')))
         layout.addWidget(logo)
-
-        layout.addWidget(QLabel("Version 0.0.0.1"))
-
-        for i in range(0, layout.count()):
-            layout.itemAt(i).setAlignment(Qt.AlignHCenter)
-
+        self.text = QLabel()
+        layout.addWidget(self.text)
         layout.addWidget(self.buttonBox)
 
+        #for i in range(0, layout.count()):
+        #    layout.itemAt(i).setAlignment(Qt.AlignHCenter)
+        
         self.setLayout(layout)
 
+    def setText(self, text):
+        self.text.setText(text)
 
-class WebBrowserTab(QMainWindow):
+
+class AboutDialog(BasicDialog):
     def __init__(self, *args, **kwargs):
-        super(MainWindow, self).__init__(*args, **kwargs)
+        super(AboutDialog, self).__init__(*args, **kwargs)
 
-        self.tabs = QTabWidget()
-        self.tabs.setDocumentMode(True)
-        self.tabs.tabBarDoubleClicked.connect(self.tab_open_doubleclick)
-        self.tabs.currentChanged.connect(self.current_tab_changed)
-        self.tabs.setTabsClosable(True)
-        self.tabs.tabCloseRequested.connect(self.close_current_tab)
 
-        self.setCentralWidget(self.tabs)
+        self.addOkayButton()
+        self.setLayout(self.layout)
 
-        self.status = QStatusBar()
-        self.setStatusBar(self.status)
+class InvalidInputDialog(BasicDialog):
+    def __init__(self, *args, **kwargs):
+        super(InvalidInputDialog, self).__init__(*args, **kwargs)
 
-        navtb = QToolBar("Navigation")
-        navtb.setIconSize(QSize(16, 16))
-        self.addToolBar(navtb)
+        invalidInputString = 'blah'
+        if isinstance(invalidInputString, str): 
+            layout.addWidget(QLabel(invalidInputString))
 
-        back_btn = QAction(QIcon(os.path.join('images', 'arrow-180.png')), "Back", self)
-        back_btn.setStatusTip("Back to previous page")
-        back_btn.triggered.connect(lambda: self.tabs.currentWidget().back())
-        navtb.addAction(back_btn)
-
-        next_btn = QAction(QIcon(os.path.join('images', 'arrow-000.png')), "Forward", self)
-        next_btn.setStatusTip("Forward to next page")
-        next_btn.triggered.connect(lambda: self.tabs.currentWidget().forward())
-        navtb.addAction(next_btn)
-
-        reload_btn = QAction(QIcon(os.path.join('images', 'arrow-circle-315.png')), "Reload", self)
-        reload_btn.setStatusTip("Reload page")
-        reload_btn.triggered.connect(lambda: self.tabs.currentWidget().reload())
-        navtb.addAction(reload_btn)
-
-        home_btn = QAction(QIcon(os.path.join('images', 'home.png')), "Home", self)
-        home_btn.setStatusTip("Go home")
-        home_btn.triggered.connect(self.navigate_home)
-        navtb.addAction(home_btn)
-
-        navtb.addSeparator()
-
-        self.httpsicon = QLabel()  # Yes, really!
-        self.httpsicon.setPixmap(QPixmap(os.path.join('images', 'lock-nossl.png')))
-        navtb.addWidget(self.httpsicon)
-
-        self.urlbar = QLineEdit()
-        self.urlbar.returnPressed.connect(self.navigate_to_url)
-        navtb.addWidget(self.urlbar)
-
-        stop_btn = QAction(QIcon(os.path.join('images', 'cross-circle.png')), "Stop", self)
-        stop_btn.setStatusTip("Stop loading current page")
-        stop_btn.triggered.connect(lambda: self.tabs.currentWidget().stop())
-        navtb.addAction(stop_btn)
-
-        # Uncomment to disable native menubar on Mac
-        # self.menuBar().setNativeMenuBar(False)
-
-        file_menu = self.menuBar().addMenu("&File")
-
-        new_tab_action = QAction(QIcon(os.path.join('images', 'ui-tab--plus.png')), "New Tab", self)
-        new_tab_action.setStatusTip("Open a new tab")
-        new_tab_action.triggered.connect(lambda _: self.add_new_tab())
-        file_menu.addAction(new_tab_action)
-
-        open_file_action = QAction(QIcon(os.path.join('images', 'disk--arrow.png')), "Open file...", self)
-        open_file_action.setStatusTip("Open from file")
-        open_file_action.triggered.connect(self.open_file)
-        file_menu.addAction(open_file_action)
-
-        save_file_action = QAction(QIcon(os.path.join('images', 'disk--pencil.png')), "Save Page As...", self)
-        save_file_action.setStatusTip("Save current page to file")
-        save_file_action.triggered.connect(self.save_file)
-        file_menu.addAction(save_file_action)
-
-        print_action = QAction(QIcon(os.path.join('images', 'printer.png')), "Print...", self)
-        print_action.setStatusTip("Print current page")
-        print_action.triggered.connect(self.print_page)
-        file_menu.addAction(print_action)
-
-        help_menu = self.menuBar().addMenu("&Help")
-
-        about_action = QAction(QIcon(os.path.join('images', 'question.png')), "About Mozarella Ashbadger", self)
-        about_action.setStatusTip("Find out more about Mozarella Ashbadger")  # Hungry!
-        about_action.triggered.connect(self.about)
-        help_menu.addAction(about_action)
-
-        navigate_mozarella_action = QAction(QIcon(os.path.join('images', 'lifebuoy.png')),
-                                            "Mozarella Ashbadger Homepage", self)
-        navigate_mozarella_action.setStatusTip("Go to Mozarella Ashbadger Homepage")
-        navigate_mozarella_action.triggered.connect(self.navigate_mozarella)
-        help_menu.addAction(navigate_mozarella_action)
-
-        self.add_new_tab(QUrl('http://www.google.com'), 'Homepage')
-
-        self.show()
-
-        self.setWindowTitle("Mozarella Ashbadger")
-        self.setWindowIcon(QIcon(os.path.join('images', 'ma-icon-64.png')))
+        self.addOkayButton()
+        self.setLayout(self.layout)
 
 
 class MainWindow(QMainWindow):
     def __init__(self, *args, **kwargs):
         super(MainWindow, self).__init__(*args, **kwargs)
+        self._token = None
+        self._refresh_token = None
+        self._tokenLifetime = None
+        self._refreshTokenLifetime = None
+
+        # Gather settings
+        settingsPath = os.path.join(os.path.dirname(os.path.realpath(__file__)),'..','..','settings.json')
+        with open(settingsPath) as fp:
+            self.settings = json.load(fp)
+
+        self.savedStatePath = os.path.join(os.path.dirname(os.path.realpath(__file__)),'..','..','saved_state.json')
+        self.savedState = {}
+        with open(self.savedStatePath) as fd:
+            try:
+                self.savedState = json.load(fd)
+                if 'last_tickers' not in self.savedState.keys():
+                    self.savedState['last_tickers'] = []
+            except:
+                self.savedState['last_tickers'] = []
+
+        self.tdClient = TDClient(accountIds=self.settings['client_id'])
 
         # Setup overall layout
         # Setup tab frame
@@ -165,7 +125,7 @@ class MainWindow(QMainWindow):
         self.tabs.tabCloseRequested.connect(self.close_current_tab)
 
         # Setup init tab with matplotlib
-        initPlot = MyStaticMplCanvas()
+        initPlot = MyMplCanvas(self)
         self.tabs.addTab(initPlot, 'Initial Tab')
 
         # Setup the List frame layout
@@ -174,23 +134,30 @@ class MainWindow(QMainWindow):
         listFrameLayout = QVBoxLayout()
         listFrame.setLayout(listFrameLayout)
 
-        tickerList = TickerList()
+        self.tickerList = TickerList()
+        self.tickerList.setSelectionMode(QAbstractItemView.ExtendedSelection)
         listButtonLayout = QHBoxLayout()
 
         # Add text box to the list frame layout
-        tickerTextBox = QLineEdit()
+        self.tickerTextBox = QLineEdit()
 
         # Add the buttons to the button layout
-        addTickerButton = QPushButton('Add')
-        runTickersButton = QPushButton('Run')
-        addTickerListButton = QPushButton('Add List')
-        listButtonLayout.addWidget(addTickerButton)
-        listButtonLayout.addWidget(runTickersButton)
-        listButtonLayout.addWidget(addTickerListButton)
+        self.addTickerButton = QPushButton('Add')
+        self.addTickerButton.clicked.connect(self.add_ticker)
+        self.runTickersButton = QPushButton('Run')
+        self.runTickersButton.clicked.connect(self.run_tickers)
+        self.addTickerListButton = QPushButton('Add List')
+        self.addTickerListButton.clicked.connect(self.add_ticker_list)
+        self.removeTickersButton = QPushButton('Remove Ticker')
+        self.removeTickersButton.clicked.connect(self.remove_tickers)
+        listButtonLayout.addWidget(self.addTickerButton)
+        listButtonLayout.addWidget(self.runTickersButton)
+        listButtonLayout.addWidget(self.addTickerListButton)
+        listButtonLayout.addWidget(self.removeTickersButton)
 
         # Add the button layout and the list to the listFrame layout
-        listFrameLayout.addWidget(tickerList)
-        listFrameLayout.addWidget(tickerTextBox)
+        listFrameLayout.addWidget(self.tickerList)
+        listFrameLayout.addWidget(self.tickerTextBox)
         listFrameLayout.addLayout(listButtonLayout)
 
         # Create the splitter for the list frame and the tab interface
@@ -202,16 +169,15 @@ class MainWindow(QMainWindow):
         listTabSplitter.setSizes([100,400])
 
         # Create the frame for the pice and volume
-        #priceVolFrame = QFrame()
-        priceVolFrame = MyStaticMplCanvas()
+        self.priceVolFrame = PriceHistoryCanvas(self)
 
         # Create the splitter for the top and bottom frames
         mainSplit = QSplitter(Qt.Vertical)
         mainSplit.addWidget(listTabSplitter)
-        mainSplit.addWidget(priceVolFrame)
+        mainSplit.addWidget(self.priceVolFrame)
         mainSplit.setStretchFactor(0,1)
         mainSplit.setStretchFactor(1,1)
-        mainSplit.setSizes([400,200])
+        mainSplit.setSizes([400,400])
 
         # Add the main splitter to the main window layout
         self.setCentralWidget(mainSplit)
@@ -245,20 +211,111 @@ class MainWindow(QMainWindow):
 
         self.setWindowTitle("Value Investing Calculator")
         self.setWindowIcon(QIcon(os.path.join('images', 'ma-icon-64.png')))
+        self.authenticate()
+
+        # Setup a timer to determine when to refresh token.
+        self.refreshTimer = QTimer()
+        self.refreshTimer.timeout.connect(self.checkToken)
+        self.refreshTimer.start(60000)
+
+    def closeEvent(self, event):
+        msgBox = QMessageBox()
+        msgBox.setText("Exit Application?")
+        msgBox.setStandardButtons(QMessageBox.Cancel | QMessageBox.Yes | QMessageBox.No)
+        msgBox.setDefaultButton(QMessageBox.Yes)
+        if msgBox.exec_() == QMessageBox.Yes:
+            self.saveTickers()
+            event.accept()
+    
+    def showEvent(self, event):
+        super(MainWindow, self).showEvent(event)
+        self.loadLastTickers()
+
+    def saveTickers(self):
+        items = []
+        for index in range(self.tickerList.count()):
+            items.append(self.tickerList.item(index).text())
+        if len(items):
+            self.savedState['last_tickers'] = items
+        with open(self.savedStatePath, 'w') as fd:
+            json.dump(self.savedState, fd, indent=3) 
+    
+    def loadLastTickers(self):
+        if len(self.savedState['last_tickers']):
+            for t in self.savedState['last_tickers']:
+                self.add_ticker(t)
+
+    def authenticate(self):
+        resp = tdauth.authentication(self.settings['client_id'], self.settings['redirect_uri'])
+        self._token = resp['access_token']
+        self._refresh_token = resp['refresh_token']
+        self._tokenLifetime = resp['expires_in']
+        self._refreshTokenLifetime = resp['refresh_token_expires_in']
+        self.tdClient.setToken(resp['access_token'])
+
+    def checkToken(self):
+        if self._tokenLifetime:
+            if (time.time() - self._tokenLifetime) < 300:
+                self.tdauth.refresh_token(self._refresh_token, self.settings['client_id'])
 
     def add_new_tab(self, ticker):
-
         i = self.tabs.addTab(browser, label)
-
         self.tabs.setCurrentIndex(i)
 
-        # More difficult! We only want to update the url when it's from the
-        # correct tab
-        #browser.urlChanged.connect(lambda qurl, browser=browser:
-        #                           self.update_urlbar(qurl, browser))
+    def add_ticker(self, ticker=None):
+        if ticker:
+            tickerText = ticker
+        else:
+            tickerText = self.tickerTextBox.text()
+        # Check input
+        if not re.match('^[A-Za-z]*$', tickerText):
+            dlg = BasicDialog()
+            dlg.setText('Ticker '+tickerText+' is invalid.  Only alphabetical characters are allowed.')
+            dlg.exec_()
+        elif len(tickerText):
+            self.tickerList.addItem(tickerText.upper())
+            self.tickerTextBox.clear()
 
-        #browser.loadFinished.connect(lambda _, i=i, browser=browser:
-        #                             self.tabs.setTabText(i, browser.page().title()))
+    def run_ticker(self, ticker):
+        # Here we are going to gather the data for the main plot widget
+        # Ten year
+        # Calculate the big 5
+        # Add to the plot
+        # Five year
+        # Calculate the big 5
+        # Add to the plot
+        # Three year
+        # Calculate the big 5
+        # Add to the plot
+        # One year
+        # Calculate the big 5
+        # Add to the plot
+
+        # Here we are going to gather the price and volume data for the bottom plot widget
+        # Gather last year of pricing data
+        data = self.tdClient.history(ticker)
+        x = []
+        y = []
+        for day in data['candles']:
+            x.append(day['datetime'])
+            #x.append(time.strftime('%D', time.gmtime(day['datetime']/1000)))
+            y.append(float(day['close']))
+        self.priceVolFrame.addPlot(asarray(x),asarray(y))
+
+        # Gather the last year of volume data
+
+    def run_tickers(self):
+        for index in range(self.tickerList.count()):
+            self.run_ticker(self.tickerList.item(index).text())
+
+    def add_ticker_list(self):
+        pass
+
+    def remove_tickers(self):
+        items = self.tickerList.selectedItems()
+        if len(items):
+            for item in items:
+                self.tickerList.takeItem(self.tickerList.row(item))
 
     def current_tab_changed(self, i):
         #qurl = self.tabs.currentWidget().url()
@@ -277,7 +334,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("%s - Value Investing Calculator" % title)
 
     def about(self):
-        dlg = AboutDialog()
+        dlg = BasicDialog()
+        dlg.setText('Version 0.0.0.1')
         dlg.exec_()
 
     def save_file(self):
@@ -301,33 +359,34 @@ class TickerList(QListWidget):
         super(TickerList, self).__init__()
 
 class MyMplCanvas(FigureCanvas):
-    """Ultimately, this is a QWidget (as well as a FigureCanvasAgg, etc.)."""
-
-    def __init__(self, parent=None, width=5, height=4, dpi=100):
-        fig = Figure(figsize=(width, height), dpi=dpi)
-        self.axes = fig.add_subplot(111)
-
-        self.compute_initial_figure()
-
-        FigureCanvas.__init__(self, fig)
+    def __init__(self, parent=None, width=365, height=100, dpi=100):
+        self.fig = Figure(figsize=(width, height), dpi=dpi)
+        FigureCanvas.__init__(self, self.fig)
+        self.axes = self.fig.subplots()
         self.setParent(parent)
-
         FigureCanvas.setSizePolicy(self,
                                    QSizePolicy.Expanding,
                                    QSizePolicy.Expanding)
         FigureCanvas.updateGeometry(self)
-
-    def compute_initial_figure(self):
-        pass
+        self.fig.canvas.draw()
 
 
-class MyStaticMplCanvas(MyMplCanvas):
-    """Simple canvas with a sine plot."""
+class PriceHistoryCanvas(MyMplCanvas):
+    def __init__(self, parent=None):
+        super(PriceHistoryCanvas, self).__init__(parent)
+        self.axes.set_title('Historical Closing Price')
+        self.axes.set_xlabel('Date')
+        self.axes.set_ylabel('Price (USD)')
+        self.fig.canvas.draw()
+    
+    def addPlot(self, x, y):
+        # The x axis here is a date
+        dates = [epoch2num(i/1000) for i in x]
+        self.axes.plot(dates,y)
+        # Get the actual string for the date
+        # set_xticklabels with rotation
+        self.fig.canvas.draw()
 
-    def compute_initial_figure(self):
-        t = arange(0.0, 3.0, 0.01)
-        s = sin(2*pi*t)
-        self.axes.plot(t, s)
 
 app = QApplication(sys.argv)
 app.setApplicationName("Value Investing Calculator")
